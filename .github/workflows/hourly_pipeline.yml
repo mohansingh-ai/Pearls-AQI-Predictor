@@ -1,0 +1,32 @@
+name: Hourly AQI Data Pipeline
+
+on:
+  schedule:
+    - cron: '0 * * * *' # Runs every hour automatically
+  workflow_dispatch: # Allows manual running
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install pandas requests hopsworks python-dotenv
+
+      - name: Run Feature Pipeline
+        env:
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          LATITUDE: ${{ secrets.LATITUDE }}
+          LONGITUDE: ${{ secrets.LONGITUDE }}
+        run: |
+          python feature_pipeline.py
+          
