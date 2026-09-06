@@ -7,14 +7,13 @@ import streamlit as st
 import hopsworks
 import joblib
 import altair as alt
+import pytz  # 📌 NEW: Added to handle Karachi timezone
 from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# 📌 FIX: Tell the app to check Streamlit Secrets first, and fallback to local .env if needed
 HOPSWORKS_API_KEY = st.secrets.get("HOPSWORKS_API_KEY", os.getenv("HOPSWORKS_API_KEY"))
-OPENWEATHER_API_KEY = st.secrets.get("OPENWEATHER_API_KEY", os.getenv("OPENWEATHER_API_KEY"))
 LAT = st.secrets.get("LATITUDE", os.getenv("LATITUDE", "24.8607"))
 LON = st.secrets.get("LONGITUDE", os.getenv("LONGITUDE", "67.0011"))
 
@@ -167,6 +166,10 @@ def get_weather_icon(hour, temp, humidity, wind):
 
 @st.cache_resource
 def load_multistep_models_and_history():
+    if not HOPSWORKS_API_KEY:
+        st.error("🚨 CRITICAL ERROR: Hopsworks API Key is missing. Check Streamlit Secrets.")
+        st.stop()
+        
     project = hopsworks.login(api_key_value=HOPSWORKS_API_KEY)
     mr = project.get_model_registry()
     
@@ -183,32 +186,22 @@ def load_multistep_models_and_history():
     
     return model_day1, model_day2, model_day3, df_hist
 
-@st.cache_data(ttl=300) # Updates every 5 minutes now
+@st.cache_data(ttl=300)
 def fetch_live_and_forecast_data():
+    # 📌 FIX: We now ONLY use Open-Meteo for clean, fast, and synced data. 
     meteo_url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,surface_pressure,wind_direction_10m&forecast_days=4&timezone=auto"
     meteo_resp = requests.get(meteo_url, timeout=45).json()['hourly']
     
     df_weather = pd.DataFrame({
-        'timestamp': pd.to_datetime(meteo_resp['time']), 'temperature': meteo_resp['temperature_2m'],
-        'humidity': meteo_resp['relative_humidity_2m'], 'wind_speed': meteo_resp['wind_speed_10m']
+        'timestamp': pd.to_datetime(meteo_resp['time']), 
+        'temperature': meteo_resp['temperature_2m'],
+        'humidity': meteo_resp['relative_humidity_2m'], 
+        'wind_speed': meteo_resp['wind_speed_10m']
     })
-
-    curr_weather_url = f"http://api.openweathermap.org/data/2.5/weather?lat={LAT}&lon={LON}&appid={OPENWEATHER_API_KEY}&units=metric"
-    curr_w_resp = requests.get(curr_weather_url, timeout=10).json()
-    live_temp = curr_w_resp.get('main', {}).get('temp', None)
-    live_humidity = curr_w_resp.get('main', {}).get('humidity', None)
     
-    # 📌 Converting OpenWeather wind speed from m/s to km/h
-    raw_wind_ms = curr_w_resp.get('wind', {}).get('speed', None)
-    live_wind = (raw_wind_ms * 3.6) if raw_wind_ms is not None else None
+    return df_weather
 
-    curr_url = f"http://api.openweathermap.org/data/2.5/air_pollution?lat={LAT}&lon={LON}&appid={OPENWEATHER_API_KEY}"
-    curr_resp = requests.get(curr_url, timeout=10).json().get('list', [{}])[0]
-    live_pm25 = curr_resp.get('components', {}).get('pm2_5', None)
-    
-    return df_weather, live_pm25, live_temp, live_humidity, live_wind
-
-@st.cache_data(ttl=300) # Updated to 5 minutes to match the fetch function
+@st.cache_data(ttl=300)
 def generate_multistep_predictions(_model_day1, _model_day2, _model_day3, df_hist, df_future):
     df_hist['hour'] = df_hist['timestamp'].dt.hour
     df_hist['month'] = df_hist['timestamp'].dt.month
@@ -225,7 +218,10 @@ def generate_multistep_predictions(_model_day1, _model_day2, _model_day3, df_his
     forecast['pm2_5'] = all_predictions
     forecast['US_AQI'] = forecast['pm2_5'].apply(calculate_us_aqi)
     
-    current_hour = pd.Timestamp.now().floor('h').tz_localize(None)
+    # 📌 FIX: Force the server to use Pakistan Standard Time (Asia/Karachi)
+    karachi_tz = pytz.timezone('Asia/Karachi')
+    current_hour = pd.Timestamp.now(tz=karachi_tz).tz_localize(None).floor('h')
+    
     if current_hour in forecast['timestamp'].values:
         forecast = forecast[forecast['timestamp'] >= current_hour].reset_index(drop=True)
     
@@ -240,12 +236,15 @@ try:
         model_day1, model_day2, model_day3, df_hist = load_multistep_models_and_history()
         
     with st.spinner("Running predictions..."):
-        df_future_raw, live_pm25, live_temp, live_humidity, live_wind = fetch_live_and_forecast_data()
+        df_future_raw = fetch_live_and_forecast_data()
         hist_df, forecast_df = generate_multistep_predictions(model_day1, model_day2, model_day3, df_hist, df_future_raw)
 
-    current_pm25 = live_pm25 if live_pm25 is not None else hist_df['pm2_5'].iloc[-1]
-    predicted_aqi = calculate_us_aqi(forecast_df['pm2_5'].iloc[0])
-    live_actual_aqi = calculate_us_aqi(current_pm25)
+    # 📌 FIX: The yellow card is now perfectly synced to the exact current hour from the forecast
+    current_row = forecast_df.iloc[0]
+    
+    predicted_aqi = int(current_row['US_AQI'])
+    # Pulls the actual real-time AQI from your Hopsworks feature store instead of OpenWeatherMap
+    live_actual_aqi = calculate_us_aqi(hist_df['pm2_5'].iloc[-1]) 
     
     inject_dynamic_background(predicted_aqi)
 
@@ -264,13 +263,14 @@ try:
         </div>
         """, unsafe_allow_html=True)
 
-    display_temp = live_temp if live_temp is not None else forecast_df['temperature'].iloc[0]
-    display_wind = live_wind if live_wind is not None else forecast_df['wind_speed'].iloc[0]
-    display_humidity = live_humidity if live_humidity is not None else forecast_df['humidity'].iloc[0]
+    # Yellow card weather updates exactly alongside the slider
+    display_temp = current_row['temperature']
+    display_wind = current_row['wind_speed']
+    display_humidity = current_row['humidity']
 
     top_col1, top_col2 = st.columns([1, 1.4]) 
     with top_col1:
-        st.markdown(get_iqair_card_html(predicted_aqi, forecast_df['pm2_5'].iloc[0], display_temp, display_wind, display_humidity, live_actual_aqi), unsafe_allow_html=True)
+        st.markdown(get_iqair_card_html(predicted_aqi, current_row['pm2_5'], display_temp, display_wind, display_humidity, live_actual_aqi), unsafe_allow_html=True)
     with top_col2:
         st.markdown(get_recommendation_card_html(predicted_aqi), unsafe_allow_html=True)
 
