@@ -220,15 +220,20 @@ def generate_multistep_predictions(_model_day1, _model_day2, _model_day3, df_his
     all_predictions = np.concatenate([pred_day1, pred_day2, pred_day3])
     all_predictions = np.maximum(all_predictions, 0)
     
-    forecast = df_future.iloc[:72].copy()
-    forecast['pm2_5'] = all_predictions
-    forecast['US_AQI'] = forecast['pm2_5'].apply(calculate_us_aqi)
-    
+    # 📌 FIX: Align array logic properly to prevent cutting off hours late at night
     karachi_tz = pytz.timezone('Asia/Karachi')
     current_hour = pd.Timestamp.now(tz=karachi_tz).tz_localize(None).floor('h')
     
-    if current_hour in forecast['timestamp'].values:
-        forecast = forecast[forecast['timestamp'] >= current_hour].reset_index(drop=True)
+    # Step 1: Remove past hours from the future weather dataset FIRST
+    if current_hour in df_future['timestamp'].values:
+        df_future = df_future[df_future['timestamp'] >= current_hour].reset_index(drop=True)
+        
+    # Step 2: Extract exactly the next 72 hours for our predictions
+    forecast = df_future.iloc[:72].copy()
+    
+    # Step 3: Now apply predictions (Array length 72 perfectly matches Dataframe length 72)
+    forecast['pm2_5'] = all_predictions
+    forecast['US_AQI'] = forecast['pm2_5'].apply(calculate_us_aqi)
     
     forecast['Date'] = forecast['timestamp'].dt.date
     forecast['Time'] = forecast['timestamp'].dt.strftime('%I:%M %p')
