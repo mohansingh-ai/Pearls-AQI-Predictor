@@ -5,3 +5,4 @@ hopsworks
 joblib
 altair
 python-dotenv
+scikit-learn
