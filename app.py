@@ -13,9 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# API Keys
 HOPSWORKS_API_KEY = st.secrets.get("HOPSWORKS_API_KEY", os.getenv("HOPSWORKS_API_KEY"))
-WAQI_API_KEY = st.secrets.get("WAQI_API_KEY", os.getenv("WAQI_API_KEY")) # 📌 NEW: WAQI API Key for accurate real-time data
 LAT = st.secrets.get("LATITUDE", os.getenv("LATITUDE", "24.8607"))
 LON = st.secrets.get("LONGITUDE", os.getenv("LONGITUDE", "67.0011"))
 
@@ -163,27 +161,6 @@ def get_weather_icon(hour, temp, humidity, wind):
     elif temp > 34: return "☀️"
     else: return "⛅"
 
-# 📌 NEW: Fetching 100% accurate ground-truth live data from WAQI (US Consulate Sensors)
-@st.cache_data(ttl=300)
-def fetch_realtime_waqi_data():
-    if not WAQI_API_KEY:
-        return None
-    url = f"https://api.waqi.info/feed/karachi/?token={WAQI_API_KEY}"
-    try:
-        resp = requests.get(url, timeout=15).json()
-        if resp.get('status') == 'ok':
-            data = resp['data']
-            return {
-                'aqi': int(data.get('aqi', 0)),
-                'pm25': float(data.get('iaqi', {}).get('pm25', {}).get('v', 0)),
-                'temp': float(data.get('iaqi', {}).get('t', {}).get('v', 0)),
-                'humidity': float(data.get('iaqi', {}).get('h', {}).get('v', 0)),
-                'wind': float(data.get('iaqi', {}).get('w', {}).get('v', 0))
-            }
-    except Exception as e:
-        print("WAQI API Fetch Error:", e)
-    return None
-
 @st.cache_resource
 def load_multistep_models_and_history():
     if not HOPSWORKS_API_KEY:
@@ -260,33 +237,22 @@ def generate_multistep_predictions(_model_day1, _model_day2, _model_day3, df_his
     return df_hist, forecast
 
 try:
-    if not WAQI_API_KEY:
-        st.warning("⚠️ WAQI API Key is missing. Using model estimations for live data. Please add WAQI_API_KEY to secrets for 100% accurate ground-truth live AQI.")
-
     with st.spinner("Connecting to Feature Store & Model Registry..."):
         model_day1, model_day2, model_day3, df_hist = load_multistep_models_and_history()
         
-    with st.spinner("Running predictions & fetching live ground sensors..."):
+    with st.spinner("Running predictions..."):
         df_future_raw = fetch_live_and_forecast_data()
         hist_df, forecast_df = generate_multistep_predictions(model_day1, model_day2, model_day3, df_hist, df_future_raw)
-        live_waqi_data = fetch_realtime_waqi_data()
 
-    # 📌 UPDATED: Logic to display 100% accurate real-time data on the main Yellow Card
-    if live_waqi_data:
-        display_aqi = live_waqi_data['aqi']
-        display_pm25 = live_waqi_data['pm25']
-        display_temp = live_waqi_data['temp']
-        display_wind = live_waqi_data['wind']
-        display_humidity = live_waqi_data['humidity']
-    else:
-        current_row = forecast_df.iloc[0]
-        display_aqi = int(current_row['US_AQI'])
-        display_pm25 = current_row['pm2_5']
-        display_temp = current_row['temperature']
-        display_wind = current_row['wind_speed']
-        display_humidity = current_row['humidity']
+    current_row = forecast_df.iloc[0]
     
-    inject_dynamic_background(display_aqi)
+    predicted_aqi = int(current_row['US_AQI'])
+    display_pm25 = current_row['pm2_5']
+    display_temp = current_row['temperature']
+    display_wind = current_row['wind_speed']
+    display_humidity = current_row['humidity']
+    
+    inject_dynamic_background(predicted_aqi)
 
     st.markdown("World / Pakistan / Sindh / **Karachi**")
     st.markdown("# Air quality in Karachi")
@@ -305,9 +271,9 @@ try:
 
     top_col1, top_col2 = st.columns([1, 1.4]) 
     with top_col1:
-        st.markdown(get_iqair_card_html(display_aqi, display_pm25, display_temp, display_wind, display_humidity), unsafe_allow_html=True)
+        st.markdown(get_iqair_card_html(predicted_aqi, display_pm25, display_temp, display_wind, display_humidity), unsafe_allow_html=True)
     with top_col2:
-        st.markdown(get_recommendation_card_html(display_aqi), unsafe_allow_html=True)
+        st.markdown(get_recommendation_card_html(predicted_aqi), unsafe_allow_html=True)
 
     st.markdown("### 🕒 Hourly Air Quality Forecast (Rolling 7-Day Context Model)")
     
