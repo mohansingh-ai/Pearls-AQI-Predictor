@@ -46,8 +46,9 @@ def fetch_current_environmental_data(lat, lon):
 
     # Construct the feature row matching the Hopsworks Feature Group schema
     df_row = pd.DataFrame([{
-        "city": "Karachi",                      # Primary key
-        "timestamp": current_time,              # Primary key / Event time
+        "city": "Karachi",                                    # Primary key
+        "timestamp": current_time,                            # Event time
+        "unix_time": int(current_time.timestamp() * 1000),    # Primary key (Time in milliseconds)
         "temperature": temp,
         "humidity": humidity,
         "wind_speed": wind_speed,
