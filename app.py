@@ -11,10 +11,12 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
-HOPSWORKS_API_KEY = os.getenv("HOPSWORKS_API_KEY")
-OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
-LAT = os.getenv("LATITUDE", "24.8607")
-LON = os.getenv("LONGITUDE", "67.0011")
+
+# 📌 FIX: Tell the app to check Streamlit Secrets first, and fallback to local .env if needed
+HOPSWORKS_API_KEY = st.secrets.get("HOPSWORKS_API_KEY", os.getenv("HOPSWORKS_API_KEY"))
+OPENWEATHER_API_KEY = st.secrets.get("OPENWEATHER_API_KEY", os.getenv("OPENWEATHER_API_KEY"))
+LAT = st.secrets.get("LATITUDE", os.getenv("LATITUDE", "24.8607"))
+LON = st.secrets.get("LONGITUDE", os.getenv("LONGITUDE", "67.0011"))
 
 st.set_page_config(page_title="Karachi Air Quality Station", page_icon="🌤️", layout="wide")
 
