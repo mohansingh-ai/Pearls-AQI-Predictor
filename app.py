@@ -7,7 +7,7 @@ import streamlit as st
 import hopsworks
 import joblib
 import altair as alt
-import pytz  # 📌 NEW: Added to handle Karachi timezone
+import pytz
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -85,6 +85,7 @@ def get_aqi_text_and_color(aqi):
     else: return "Hazardous 🟤", "#fda4af"
 
 def get_iqair_card_html(aqi, pm25, temp, wind, humidity, live_aqi):
+    # 📌 RESTORED DYNAMIC COLORS BASED ON AQI SEVERITY
     if aqi <= 50: bg_color, text_color, status, emoji = "#A8E05F", "#1A1A1A", "Good", "😃"
     elif aqi <= 100: bg_color, text_color, status, emoji = "#FDD64B", "#1A1A1A", "Moderate", "😐"
     elif aqi <= 150: bg_color, text_color, status, emoji = "#FF9B57", "#1A1A1A", "Unhealthy for Sensitive Groups", "😷"
@@ -182,13 +183,12 @@ def load_multistep_models_and_history():
     
     fs = project.get_feature_store()
     fg = fs.get_feature_group(name="aqi_weather_features", version=3)
-    df_hist = fg.read(read_options={"use_hive": True}).sort_values("timestamp").tail(48).reset_index(drop=True)
+    df_hist = fg.read(read_options={"use_hive": True}).sort_values("timestamp").tail(72).reset_index(drop=True)
     
     return model_day1, model_day2, model_day3, df_hist
 
 @st.cache_data(ttl=300)
 def fetch_live_and_forecast_data():
-    # 📌 FIX: We now ONLY use Open-Meteo for clean, fast, and synced data. 
     meteo_url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,surface_pressure,wind_direction_10m&forecast_days=4&timezone=auto"
     meteo_resp = requests.get(meteo_url, timeout=45).json()['hourly']
     
@@ -205,7 +205,17 @@ def fetch_live_and_forecast_data():
 def generate_multistep_predictions(_model_day1, _model_day2, _model_day3, df_hist, df_future):
     df_hist['hour'] = df_hist['timestamp'].dt.hour
     df_hist['month'] = df_hist['timestamp'].dt.month
-    current_data = df_hist.iloc[[-1]][['temperature', 'humidity', 'wind_speed', 'pm2_5', 'hour', 'month']]
+    
+    recent_window = df_hist.tail(24)
+    
+    current_data = pd.DataFrame([{
+        'temperature': recent_window['temperature'].mean(),
+        'humidity': recent_window['humidity'].mean(),
+        'wind_speed': recent_window['wind_speed'].mean(),
+        'pm2_5': recent_window['pm2_5'].mean(),
+        'hour': df_hist.iloc[-1]['timestamp'].hour,
+        'month': df_hist.iloc[-1]['timestamp'].month
+    }])
     
     pred_day1 = _model_day1.predict(current_data)[0]
     pred_day2 = _model_day2.predict(current_data)[0]
@@ -218,7 +228,6 @@ def generate_multistep_predictions(_model_day1, _model_day2, _model_day3, df_his
     forecast['pm2_5'] = all_predictions
     forecast['US_AQI'] = forecast['pm2_5'].apply(calculate_us_aqi)
     
-    # 📌 FIX: Force the server to use Pakistan Standard Time (Asia/Karachi)
     karachi_tz = pytz.timezone('Asia/Karachi')
     current_hour = pd.Timestamp.now(tz=karachi_tz).tz_localize(None).floor('h')
     
@@ -239,11 +248,9 @@ try:
         df_future_raw = fetch_live_and_forecast_data()
         hist_df, forecast_df = generate_multistep_predictions(model_day1, model_day2, model_day3, df_hist, df_future_raw)
 
-    # 📌 FIX: The yellow card is now perfectly synced to the exact current hour from the forecast
     current_row = forecast_df.iloc[0]
     
     predicted_aqi = int(current_row['US_AQI'])
-    # Pulls the actual real-time AQI from your Hopsworks feature store instead of OpenWeatherMap
     live_actual_aqi = calculate_us_aqi(hist_df['pm2_5'].iloc[-1]) 
     
     inject_dynamic_background(predicted_aqi)
@@ -263,7 +270,6 @@ try:
         </div>
         """, unsafe_allow_html=True)
 
-    # Yellow card weather updates exactly alongside the slider
     display_temp = current_row['temperature']
     display_wind = current_row['wind_speed']
     display_humidity = current_row['humidity']
@@ -361,6 +367,7 @@ try:
     st.altair_chart(c2, use_container_width=True)
 
     with st.expander("📊 View Model Validation & Multi-Step Accuracy Report"):
+        st.markdown("### Model Architecture: **Random Forest Regressor**")
         st.markdown("Evaluating true direct multi-step performance across testing horizons:")
         col1, col2, col3 = st.columns(3)
         with col1:
