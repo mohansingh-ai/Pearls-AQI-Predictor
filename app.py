@@ -85,7 +85,6 @@ def get_aqi_text_and_color(aqi):
     else: return "Hazardous 🟤", "#fda4af"
 
 def get_iqair_card_html(aqi, pm25, temp, wind, humidity, live_aqi):
-    # 📌 RESTORED DYNAMIC COLORS BASED ON AQI SEVERITY
     if aqi <= 50: bg_color, text_color, status, emoji = "#A8E05F", "#1A1A1A", "Good", "😃"
     elif aqi <= 100: bg_color, text_color, status, emoji = "#FDD64B", "#1A1A1A", "Moderate", "😐"
     elif aqi <= 150: bg_color, text_color, status, emoji = "#FF9B57", "#1A1A1A", "Unhealthy for Sensitive Groups", "😷"
@@ -183,7 +182,8 @@ def load_multistep_models_and_history():
     
     fs = project.get_feature_store()
     fg = fs.get_feature_group(name="aqi_weather_features", version=3)
-    df_hist = fg.read(read_options={"use_hive": True}).sort_values("timestamp").tail(72).reset_index(drop=True)
+    # 📌 UPDATED: Fetching the last 168 hours (7 Days) of data from Hopsworks Feature Store
+    df_hist = fg.read(read_options={"use_hive": True}).sort_values("timestamp").tail(168).reset_index(drop=True)
     
     return model_day1, model_day2, model_day3, df_hist
 
@@ -206,7 +206,8 @@ def generate_multistep_predictions(_model_day1, _model_day2, _model_day3, df_his
     df_hist['hour'] = df_hist['timestamp'].dt.hour
     df_hist['month'] = df_hist['timestamp'].dt.month
     
-    recent_window = df_hist.tail(24)
+    # 📌 UPDATED: Now taking a rolling average of 168 hours (7 Days) to feed into the model
+    recent_window = df_hist.tail(168)
     
     current_data = pd.DataFrame([{
         'temperature': recent_window['temperature'].mean(),
@@ -366,8 +367,8 @@ try:
     ).properties(height=300)
     st.altair_chart(c2, use_container_width=True)
 
-    with st.expander("📊 View Model Validation & Multi-Step Accuracy Report"):
-        st.markdown("### Model Architecture: **Random Forest Regressor**")
+    # 📌 UPDATED: Placed the Model Architecture name directly in the Expander Title
+    with st.expander("📊 View Model Validation Report (Random Forest Regressor)"):
         st.markdown("Evaluating true direct multi-step performance across testing horizons:")
         col1, col2, col3 = st.columns(3)
         with col1:
