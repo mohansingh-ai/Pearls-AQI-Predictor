@@ -7,3 +7,4 @@ altair
 python-dotenv
 scikit-learn==1.9.0
 pytz
+pyarrow<25.0.0
